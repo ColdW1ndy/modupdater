@@ -2,15 +2,17 @@ import os
 import json
 import hashlib
 import requests
-from tqdm import tqdm  # 引入进度条库
+import logging
+from tqdm import tqdm
 
 # 配置
 SERVER_URL = 'http://localhost:5000'  # 修改为你的服务器地址
 UPDATE_JSON = 'update.json'
 HASH_TREE_FILE = 'hash_tree.json'
+LOG_FILE = 'client_log.txt'  # 日志文件名
 BASE_DIRECTORY = os.path.join(os.getcwd(), '.minecraft', 'versions', '模块化科技：探索v1.07-r3')
 
-# 要计算哈希的文件夹列表（包括 modularmachinery 和 mekanism）
+# 要计算哈希的文件夹列表
 FOLDERS_TO_HASH = [
     os.path.join(BASE_DIRECTORY, 'mods'),
     os.path.join(BASE_DIRECTORY, 'scripts'),
@@ -18,16 +20,21 @@ FOLDERS_TO_HASH = [
     os.path.join(BASE_DIRECTORY, 'config', 'mekanism')
 ]
 
-# 计算文件的哈希值
+# 设置日志配置
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler(LOG_FILE, 'a', 'utf-8'), logging.StreamHandler()])
+
+# 计算文件的哈希值（使用 SHA-256）
 def calculate_file_hash(file_path):
-    hash_md5 = hashlib.md5()  # 使用 MD5 算法
+    hash_sha256 = hashlib.sha256()
     try:
         with open(file_path, 'rb') as f:
             for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
     except Exception as e:
-        print(f'计算文件 {file_path} 哈希时发生错误: {e}')
+        logging.error(f'计算文件 {file_path} 哈希时发生错误: {e}')
         return None
 
 # 生成哈希树
@@ -37,7 +44,7 @@ def generate_hash_tree(directories):
         for root, _, files in os.walk(directory):
             for file in files:
                 file_path = os.path.join(root, file)
-                relative_path = os.path.relpath(file_path, BASE_DIRECTORY)  # 使用相对路径
+                relative_path = os.path.relpath(file_path, BASE_DIRECTORY)
                 file_hash = calculate_file_hash(file_path)
                 if file_hash:
                     hash_tree[relative_path] = file_hash
@@ -48,15 +55,15 @@ def fetch_update_json():
     try:
         response = requests.get(f'{SERVER_URL}/download/{UPDATE_JSON}')
         if response.status_code == 200:
-            with open(UPDATE_JSON, 'wb') as f:  # 保存到当前运行目录
+            with open(UPDATE_JSON, 'wb') as f:
                 f.write(response.content)
-            print(f'{UPDATE_JSON} 已下载并保存在当前运行目录')
+            logging.info(f'{UPDATE_JSON} 已下载并保存在当前运行目录')
             return UPDATE_JSON
         else:
-            print(f'下载 {UPDATE_JSON} 失败: {response.status_code}')
+            logging.warning(f'下载 {UPDATE_JSON} 失败: {response.status_code}')
             return None
     except Exception as e:
-        print(f'获取 {UPDATE_JSON} 时发生错误: {e}')
+        logging.error(f'获取 {UPDATE_JSON} 时发生错误: {e}')
         return None
 
 # 删除与 update.json 不匹配的文件
@@ -67,22 +74,21 @@ def compare_and_cleanup(local_hash_tree, update_hash_tree):
             file_to_remove = os.path.join(BASE_DIRECTORY, local_file)
             if os.path.exists(file_to_remove):
                 os.remove(file_to_remove)
-                print(f'文件已删除: {file_to_remove}')
+                logging.info(f'文件已删除: {file_to_remove}')
             else:
-                print(f'文件未找到: {file_to_remove}')
+                logging.warning(f'文件未找到: {file_to_remove}')
 
 # 下载缺失文件，添加进度条显示
 def download_missing_files(update_hash_tree, local_hash_tree):
     for update_file, update_hash in update_hash_tree.items():
         if update_file not in local_hash_tree:
-            print(f'缺失文件: {update_file}，开始下载...')
+            logging.info(f'缺失文件: {update_file}，开始下载...')
             try:
                 response = requests.get(f'{SERVER_URL}/download/{os.path.basename(update_file)}', stream=True)
-                total_size = int(response.headers.get('content-length', 0))  # 获取文件总大小
+                total_size = int(response.headers.get('content-length', 0))
                 file_path = os.path.join(BASE_DIRECTORY, update_file)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-                # 使用 tqdm 添加进度条显示
                 with open(file_path, 'wb') as f, tqdm(
                     desc=f'下载中: {os.path.basename(update_file)}',
                     total=total_size,
@@ -93,10 +99,10 @@ def download_missing_files(update_hash_tree, local_hash_tree):
                     for chunk in response.iter_content(1024):
                         if chunk:
                             f.write(chunk)
-                            bar.update(len(chunk))  # 更新进度条
-                print(f'文件已下载并保存到: {file_path}')
+                            bar.update(len(chunk))
+                logging.info(f'文件已下载并保存在: {file_path}')
             except Exception as e:
-                print(f'下载文件 {update_file} 时发生错误: {e}')
+                logging.error(f'下载文件 {update_file} 时发生错误: {e}')
 
 # 主程序：生成哈希树，下载 update.json 并比对
 def main_program():
@@ -107,7 +113,7 @@ def main_program():
     with open(HASH_TREE_FILE, 'w', encoding='utf-8') as f:
         json.dump(local_hash_tree, f, ensure_ascii=False, indent=4)
     
-    print(f'本地哈希树已生成并保存在 {HASH_TREE_FILE}')
+    logging.info(f'本地哈希树已生成并保存在 {HASH_TREE_FILE}')
 
     # 获取 update.json
     update_file = fetch_update_json()
@@ -125,5 +131,4 @@ def main_program():
     download_missing_files(update_hash_tree, local_hash_tree)
 
 if __name__ == '__main__':
-    # 直接在当前终端中运行程序
     main_program()
